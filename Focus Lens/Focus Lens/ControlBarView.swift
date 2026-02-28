@@ -201,7 +201,6 @@ struct EyeTrackingToggle: View {
     @ObservedObject var viewModel: OverlayViewModel
 
     private var isEyeMode: Bool { viewModel.trackingMode == .eye }
-    private var tracker: EyeTrackingManager { viewModel.eyeTracker }
 
     var body: some View {
         HStack(spacing: 5) {
@@ -213,11 +212,11 @@ struct EyeTrackingToggle: View {
                     .help(dotHelp)
             }
 
-            Button(action: {
-                viewModel.setTrackingMode(isEyeMode ? .cursor : .eye)
-            }) {
-                HStack(spacing: 4) {
-                    Image(systemName: isEyeMode ? "eye.fill" : "eye")
+             Button(action: {
+                 viewModel.setTrackingMode(isEyeMode ? .cursor : .eye)
+             }) {
+                 HStack(spacing: 4) {
+                     Image(systemName: isEyeMode ? "eye.fill" : "cursorarrow.click")
                         .font(.system(size: 13))
                     Text(isEyeMode ? "Eye" : "Cursor")
                         .font(.system(size: 10, weight: .medium))
@@ -230,9 +229,31 @@ struct EyeTrackingToggle: View {
             }
             .buttonStyle(.plain)
             .help(isEyeMode ? "Switch to cursor tracking" : "Switch to eye tracking")
+            
+            // Backend switcher (only show when eye mode active)
+            if isEyeMode {
+                Button(action: {
+                    let newBackend: EyeTrackerBackend = viewModel.backend == .python ? .native : .python
+                    viewModel.switchBackend(newBackend)
+                }) {
+                    HStack(spacing: 3) {
+                        Image(systemName: viewModel.backend == .python ? "point.3.connected.trianglepath.dotted" : "eye.trianglebadge.exclamationmark")
+                            .font(.system(size: 10))
+                        Text(viewModel.backend == .python ? "Python" : "Vision")
+                            .font(.system(size: 9, weight: .medium))
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color.purple.opacity(0.2))
+                    .foregroundColor(.purple)
+                    .cornerRadius(5)
+                }
+                .buttonStyle(.plain)
+                .help("Switch between Python (OpenCV) and native Vision tracking")
+            }
 
             // Inline error message
-            if let error = tracker.errorMessage {
+            if let error = viewModel.currentTrackerError {
                 Text(error)
                     .font(.system(size: 9))
                     .foregroundColor(.red)
@@ -243,12 +264,12 @@ struct EyeTrackingToggle: View {
     }
 
     private var dotColor: Color {
-        if tracker.errorMessage != nil { return .red }
-        return tracker.faceDetected ? .green : .orange
+        if viewModel.currentTrackerError != nil { return .red }
+        return viewModel.currentTrackerFaceDetected ? .green : .orange
     }
 
     private var dotHelp: String {
-        if let error = tracker.errorMessage { return error }
-        return tracker.faceDetected ? "Face detected" : "Searching for face…"
+        if let error = viewModel.currentTrackerError { return error }
+        return viewModel.currentTrackerFaceDetected ? "Face detected" : "Searching for face…"
     }
 }
