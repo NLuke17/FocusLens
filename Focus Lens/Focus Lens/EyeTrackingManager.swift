@@ -2,7 +2,8 @@
 //  EyeTrackingManager.swift
 //  FocusLens
 //
-//  Iris-based gaze tracking using Apple Vision + AVFoundation
+//  Iris-based gaze tracking using Apple Vision + AVFoundation.
+//  Uses a One Euro Filter for adaptive jitter reduction.
 //
 
 import AVFoundation
@@ -23,10 +24,12 @@ class EyeTrackingManager: NSObject, ObservableObject {
     private var captureSession: AVCaptureSession?
     private let sessionQueue = DispatchQueue(label: "com.focuslens.eyeTracking", qos: .userInteractive)
 
-    // Exponential moving average — lower = smoother/more lag, higher = snappier/more jitter
-    private let smoothingFactor: CGFloat = 0.12
-    private var smoothedPoint: CGPoint = .zero
-    private var hasInitialPoint = false
+    // One Euro Filters — one for the raw signal (used by calibration),
+    // one for the default screen-space output.
+    // minCutoff: smoothing at rest (lower = smoother)
+    // beta: speed responsiveness (higher = snappier on fast moves)
+    private var rawFilter    = OneEuroFilter2D(minCutoff: 0.8,  beta: 0.005)
+    private var screenFilter = OneEuroFilter2D(minCutoff: 0.8,  beta: 0.005)
 
     // MARK: - Public API
 
@@ -48,7 +51,8 @@ class EyeTrackingManager: NSObject, ObservableObject {
         sessionQueue.async { [weak self] in
             self?.captureSession?.stopRunning()
             self?.captureSession = nil
-            self?.hasInitialPoint = false
+            self?.rawFilter.reset()
+            self?.screenFilter.reset()
         }
         DispatchQueue.main.async {
             self.isTracking = false
@@ -107,16 +111,8 @@ class EyeTrackingManager: NSObject, ObservableObject {
         DispatchQueue.main.async { self.isTracking = true }
     }
 
-    /// Returns the best available camera. Uses the system default first (most reliable
-    /// on macOS), then falls back to a full device enumeration.
     private func bestCamera() -> AVCaptureDevice? {
-        // AVCaptureDevice.default(for:) is the most reliable way to get the
-        // system-selected camera on macOS regardless of device type or position.
-        if let device = AVCaptureDevice.default(for: .video) {
-            return device
-        }
-
-        // Fallback: enumerate all video devices
+        if let device = AVCaptureDevice.default(for: .video) { return device }
         return AVCaptureDevice.devices(for: .video).first
     }
 }
@@ -136,7 +132,6 @@ extension EyeTrackingManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             request.revision = VNDetectFaceLandmarksRequestRevision3
         }
 
-        // .leftMirrored un-mirrors the front camera so Vision's "left" == user's left
         let handler = VNImageRequestHandler(
             cvPixelBuffer: pixelBuffer,
             orientation: .leftMirrored,
@@ -144,10 +139,9 @@ extension EyeTrackingManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         )
         do {
             try handler.perform([request])
-            processResults(request.results)
-        } catch {
-            // Frame dropped — ignore
-        }
+            let timestamp = CACurrentMediaTime()
+            processResults(request.results, timestamp: timestamp)
+        } catch { }
     }
 }
 
@@ -155,7 +149,7 @@ extension EyeTrackingManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 
 private extension EyeTrackingManager {
 
-    func processResults(_ results: [VNFaceObservation]?) {
+    func processResults(_ results: [VNFaceObservation]?, timestamp: Double) {
         guard
             let face = results?.first,
             let landmarks = face.landmarks,
@@ -172,9 +166,8 @@ private extension EyeTrackingManager {
 
         DispatchQueue.main.async { self.faceDetected = true }
 
-        let faceBounds = face.boundingBox  // normalized, bottom-left origin
+        let faceBounds = face.boundingBox
 
-        // Convert from face-local normalized → full-image normalized coordinates
         let leftPupilImg  = toImageCoords(leftPupil.normalizedPoints[0],  in: faceBounds)
         let rightPupilImg = toImageCoords(rightPupil.normalizedPoints[0], in: faceBounds)
 
@@ -183,8 +176,6 @@ private extension EyeTrackingManager {
         let leftWidth   = eyeWidth(leftEye,   in: faceBounds)
         let rightWidth  = eyeWidth(rightEye,  in: faceBounds)
 
-        // Iris offset relative to eye center, normalized by eye width.
-        // Encodes gaze direction independent of head size or distance from camera.
         let leftOffX  = leftWidth  > 0 ? (leftPupilImg.x  - leftCenter.x)  / leftWidth  : 0
         let leftOffY  = leftWidth  > 0 ? (leftPupilImg.y  - leftCenter.y)  / leftWidth  : 0
         let rightOffX = rightWidth > 0 ? (rightPupilImg.x - rightCenter.x) / rightWidth : 0
@@ -193,30 +184,31 @@ private extension EyeTrackingManager {
         let irisOffX = (leftOffX + rightOffX) / 2
         let irisOffY = (leftOffY + rightOffY) / 2
 
-        // Face centre = coarse head-direction; iris offset = fine gaze direction
         let gazeNormX = faceBounds.midX + irisOffX * 0.5
-        let gazeNormY = faceBounds.midY + irisOffY * 0.5  // bottom-left origin
+        let gazeNormY = faceBounds.midY + irisOffY * 0.5
 
-        // Raw signal: flip Y to top-left origin, keep in 0-1 normalised space.
-        // This is what CalibrationManager uses to build a calibrated mapping.
-        let raw = CGPoint(x: gazeNormX, y: 1.0 - gazeNormY)
+        // Raw signal (top-left origin, 0-1) — smoothed for calibration input
+        let rawUnsmoothed = CGPoint(x: gazeNormX, y: 1.0 - gazeNormY)
+        let raw = rawFilter.filter(rawUnsmoothed, timestamp: timestamp)
 
         guard let screen = NSScreen.main else { return }
         let w = screen.frame.width
         let h = screen.frame.height
 
-        // Default (uncalibrated) mapping: gain expands the typical movement range to the full screen
+        // Default uncalibrated screen mapping
         let gain: CGFloat = 2.2
         let mappedX = (gazeNormX - 0.5) * gain + 0.5
         let mappedY = (gazeNormY - 0.5) * gain + 0.5
 
-        let screenX = Swift.max(0, Swift.min(mappedX * w, w))
-        let screenY = Swift.max(0, Swift.min((1.0 - mappedY) * h, h))  // flip Y → top-left
+        let screenRaw = CGPoint(
+            x: Swift.max(0, Swift.min(mappedX * w, w)),
+            y: Swift.max(0, Swift.min((1.0 - mappedY) * h, h))
+        )
+        let screenSmoothed = screenFilter.filter(screenRaw, timestamp: timestamp)
 
-        let smoothed = applyEMA(to: CGPoint(x: screenX, y: screenY))
         DispatchQueue.main.async {
             self.rawGazeSignal = raw
-            self.gazePoint = smoothed
+            self.gazePoint = screenSmoothed
         }
     }
 
@@ -238,18 +230,82 @@ private extension EyeTrackingManager {
         let xs = region.normalizedPoints.map { toImageCoords($0, in: face).x }
         return (xs.max() ?? 0) - (xs.min() ?? 0)
     }
+}
 
-    func applyEMA(to new: CGPoint) -> CGPoint {
-        guard hasInitialPoint else {
-            smoothedPoint = new
-            hasInitialPoint = true
-            return new
+// MARK: - One Euro Filter
+
+/// Adaptive low-pass filter for real-time signal smoothing.
+/// Reduces jitter when still, stays responsive during fast movements.
+/// Reference: Casiez et al., "1€ Filter: A Simple Speed-based Low-pass Filter
+/// for Noisy Input in Interactive Systems", CHI 2012.
+private class OneEuroFilter2D {
+    private var fx: OneEuroFilter1D
+    private var fy: OneEuroFilter1D
+
+    init(minCutoff: Double, beta: Double, dCutoff: Double = 1.0) {
+        fx = OneEuroFilter1D(minCutoff: minCutoff, beta: beta, dCutoff: dCutoff)
+        fy = OneEuroFilter1D(minCutoff: minCutoff, beta: beta, dCutoff: dCutoff)
+    }
+
+    func filter(_ point: CGPoint, timestamp: Double) -> CGPoint {
+        CGPoint(x: CGFloat(fx.filter(Double(point.x), t: timestamp)),
+                y: CGFloat(fy.filter(Double(point.y), t: timestamp)))
+    }
+
+    func reset() {
+        fx.reset()
+        fy.reset()
+    }
+}
+
+private class OneEuroFilter1D {
+    let minCutoff: Double
+    let beta: Double
+    let dCutoff: Double
+
+    private var xPrev: Double?
+    private var dxPrev: Double = 0.0
+    private var tPrev: Double?
+
+    init(minCutoff: Double, beta: Double, dCutoff: Double) {
+        self.minCutoff = minCutoff
+        self.beta = beta
+        self.dCutoff = dCutoff
+    }
+
+    func filter(_ x: Double, t: Double) -> Double {
+        guard let xp = xPrev, let tp = tPrev else {
+            xPrev = x; tPrev = t
+            return x
         }
-        let s = smoothingFactor
-        smoothedPoint = CGPoint(
-            x: smoothedPoint.x + s * (new.x - smoothedPoint.x),
-            y: smoothedPoint.y + s * (new.y - smoothedPoint.y)
-        )
-        return smoothedPoint
+
+        let dt = t - tp
+        guard dt > 0 else { return xp }
+
+        // Derivative low-pass
+        let aDeriv = alpha(cutoff: dCutoff, dt: dt)
+        let dx = (x - xp) / dt
+        let dxHat = aDeriv * dx + (1.0 - aDeriv) * dxPrev
+
+        // Adaptive cutoff based on speed
+        let cutoff = minCutoff + beta * abs(dxHat)
+        let a = alpha(cutoff: cutoff, dt: dt)
+        let xHat = a * x + (1.0 - a) * xp
+
+        xPrev = xHat
+        dxPrev = dxHat
+        tPrev = t
+        return xHat
+    }
+
+    func reset() {
+        xPrev = nil
+        dxPrev = 0.0
+        tPrev = nil
+    }
+
+    private func alpha(cutoff: Double, dt: Double) -> Double {
+        let r = 2.0 * .pi * cutoff * dt
+        return r / (r + 1.0)
     }
 }
