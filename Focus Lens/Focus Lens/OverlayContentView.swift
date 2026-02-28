@@ -10,7 +10,6 @@ import SwiftUI
 struct OverlayContentView: View {
     @ObservedObject var viewModel: OverlayViewModel
     @State private var isControlBarHovered = false
-    weak var window: NSWindow?
     
     var body: some View {
         ZStack {
@@ -41,12 +40,8 @@ struct OverlayContentView: View {
             
             // Control bar at the top
             VStack {
-                ControlBarView(viewModel: viewModel)
+                ControlBarView(viewModel: viewModel, isHovered: $isControlBarHovered)
                     .padding(.top, 20)
-                    .onHover { hovering in
-                        // Enable mouse events when hovering control bar
-                        window?.ignoresMouseEvents = !hovering
-                    }
                 
                 Spacer()
             }

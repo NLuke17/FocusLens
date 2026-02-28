@@ -9,6 +9,7 @@ import SwiftUI
 
 struct ControlBarView: View {
     @ObservedObject var viewModel: OverlayViewModel
+    @Binding var isHovered: Bool
     
     var body: some View {
         HStack(spacing: 16) {
@@ -109,5 +110,8 @@ struct ControlBarView: View {
                 .cornerRadius(20)
                 .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 5)
         )
+        .onHover { hovering in
+            isHovered = hovering
+        }
     }
 }

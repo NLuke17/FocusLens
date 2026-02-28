@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # FocusLens - Native macOS App
 
 A native macOS overlay application that provides focus enhancement with real-time blur effects.
@@ -165,3 +166,6 @@ Potential features to add:
 ## License
 
 Copyright © 2024. All rights reserved.
+=======
+# FocusLens
+>>>>>>> 37d7cf040cf5b0d9e77e7b6559c549dca704f70e

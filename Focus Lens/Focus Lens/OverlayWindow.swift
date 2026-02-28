@@ -26,13 +26,12 @@ class OverlayWindow: NSWindow {
         self.backgroundColor = .clear
         self.level = .floating
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        self.ignoresMouseEvents = true  // Enable click-through by default
+        self.ignoresMouseEvents = false
         self.hasShadow = false
         self.isMovable = false
         
         // Create SwiftUI view
-        var contentView = OverlayContentView(viewModel: viewModel)
-        contentView.window = self
+        let contentView = OverlayContentView(viewModel: viewModel)
         self.contentView = NSHostingView(rootView: contentView)
         
         // Setup mouse tracking
