@@ -229,31 +229,9 @@ struct EyeTrackingToggle: View {
             }
             .buttonStyle(.plain)
             .help(isEyeMode ? "Switch to cursor tracking" : "Switch to eye tracking")
-            
-            // Backend switcher (only show when eye mode active)
-            if isEyeMode {
-                Button(action: {
-                    let newBackend: EyeTrackerBackend = viewModel.backend == .python ? .native : .python
-                    viewModel.switchBackend(newBackend)
-                }) {
-                    HStack(spacing: 3) {
-                        Image(systemName: viewModel.backend == .python ? "point.3.connected.trianglepath.dotted" : "eye.trianglebadge.exclamationmark")
-                            .font(.system(size: 10))
-                        Text(viewModel.backend == .python ? "Python" : "Vision")
-                            .font(.system(size: 9, weight: .medium))
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(Color.purple.opacity(0.2))
-                    .foregroundColor(.purple)
-                    .cornerRadius(5)
-                }
-                .buttonStyle(.plain)
-                .help("Switch between Python (OpenCV) and native Vision tracking")
-            }
 
             // Inline error message
-            if let error = viewModel.currentTrackerError {
+            if let error = viewModel.eyeTracker.errorMessage {
                 Text(error)
                     .font(.system(size: 9))
                     .foregroundColor(.red)
@@ -261,15 +239,29 @@ struct EyeTrackingToggle: View {
                     .frame(maxWidth: 180)
             }
         }
+        .alert("Camera Permission Required", isPresented: .constant(viewModel.eyeTracker.errorMessage != nil && isEyeMode)) {
+            Button("Open System Settings") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") {
+                    NSWorkspace.shared.open(url)
+                }
+                viewModel.eyeTracker.errorMessage = nil
+            }
+            Button("Switch to Cursor", role: .cancel) {
+                viewModel.setTrackingMode(.cursor)
+                viewModel.eyeTracker.errorMessage = nil
+            }
+        } message: {
+            Text(viewModel.eyeTracker.errorMessage ?? "Camera access is required for eye tracking.")
+        }
     }
 
     private var dotColor: Color {
-        if viewModel.currentTrackerError != nil { return .red }
-        return viewModel.currentTrackerFaceDetected ? .green : .orange
+        if viewModel.eyeTracker.errorMessage != nil { return .red }
+        return viewModel.eyeTracker.faceDetected ? .green : .orange
     }
 
     private var dotHelp: String {
-        if let error = viewModel.currentTrackerError { return error }
-        return viewModel.currentTrackerFaceDetected ? "Face detected" : "Searching for face…"
+        if let error = viewModel.eyeTracker.errorMessage { return error }
+        return viewModel.eyeTracker.faceDetected ? "Face detected" : "Searching for face…"
     }
 }
