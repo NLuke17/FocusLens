@@ -33,9 +33,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         overlayWindow = OverlayWindow()
         overlayWindow?.makeKeyAndOrderFront(nil)
         
-        // Register global keyboard shortcut (Cmd+Shift+Q to quit)
+        // Register global keyboard shortcuts
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            // Cmd+Shift+Q to quit
             if event.modifierFlags.contains([.command, .shift]) && event.charactersIgnoringModifiers == "q" {
+                NSApp.terminate(nil)
+                return nil
+            }
+            // Escape key to quit (easier!)
+            if event.keyCode == 53 { // Escape key
+                NSApp.terminate(nil)
+                return nil
+            }
+            // Cmd+Q to quit (standard Mac quit)
+            if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "q" {
                 NSApp.terminate(nil)
                 return nil
             }
@@ -58,7 +69,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         menu.addItem(NSMenuItem(title: "FocusLens", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApp.terminate(_:)), keyEquivalent: "q"))
+        
+        let quitItem = NSMenuItem(title: "Quit FocusLens", action: #selector(NSApp.terminate(_:)), keyEquivalent: "q")
+        quitItem.keyEquivalentModifierMask = .command
+        menu.addItem(quitItem)
         
         statusItem?.menu = menu
         statusItem?.button?.performClick(nil)
