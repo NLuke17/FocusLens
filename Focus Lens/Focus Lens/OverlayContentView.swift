@@ -42,6 +42,15 @@ struct OverlayContentView: View {
                 .zIndex(2)
             }
             
+            // Calibration overlay — sits above the focus effects, below the control bar
+            if viewModel.calibration.isCalibrating {
+                CalibrationOverlayView(calibration: viewModel.calibration)
+                    .allowsHitTesting(true)
+                    .zIndex(100)
+                    .onAppear  { window?.ignoresMouseEvents = false }
+                    .onDisappear { window?.ignoresMouseEvents = true }
+            }
+
             // Control bar at the top - always on top with highest z-index
             VStack {
                 ControlBarView(viewModel: viewModel)
@@ -50,7 +59,7 @@ struct OverlayContentView: View {
                         // Enable mouse events when hovering control bar
                         window?.ignoresMouseEvents = !hovering
                     }
-                
+
                 Spacer()
             }
             .zIndex(999)  // Always on top
@@ -150,6 +159,88 @@ struct FocusRingView: View {
                 .stroke(Color.blue.opacity(0.4), lineWidth: 2)
                 .frame(width: focusRadius * 2, height: focusRadius * 2)
                 .position(mousePosition)
+        }
+    }
+}
+
+// MARK: - Calibration overlay
+
+struct CalibrationOverlayView: View {
+    @ObservedObject var calibration: CalibrationManager
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                // Semi-transparent backdrop
+                Color.black.opacity(0.80)
+                    .ignoresSafeArea()
+
+                // Instructions (top)
+                VStack(spacing: 8) {
+                    Text("Eye Tracking Calibration")
+                        .font(.system(size: 26, weight: .bold))
+                        .foregroundColor(.white)
+
+                    Text("Look directly at the dot and keep still")
+                        .font(.system(size: 15))
+                        .foregroundColor(.white.opacity(0.75))
+
+                    Text("Step \(calibration.currentStep + 1) of \(calibration.points.count)")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white.opacity(0.5))
+                        .padding(.top, 2)
+                }
+                .padding(.top, 80)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+                // Pulsing calibration dot with progress ring
+                let pt = calibration.points[calibration.currentStep]
+                CalibrationDotView(progress: calibration.stepProgress)
+                    .position(x: pt.x * geo.size.width,
+                              y: pt.y * geo.size.height)
+
+                // Cancel button (bottom)
+                VStack {
+                    Spacer()
+                    Button("Cancel Calibration") {
+                        calibration.cancelCalibration()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 13))
+                    .foregroundColor(.white.opacity(0.5))
+                    .padding(.bottom, 40)
+                }
+            }
+        }
+    }
+}
+
+struct CalibrationDotView: View {
+    let progress: Double
+    @State private var pulsing = false
+
+    var body: some View {
+        ZStack {
+            // Background progress ring track
+            Circle()
+                .stroke(Color.white.opacity(0.2), lineWidth: 4)
+                .frame(width: 64, height: 64)
+
+            // Filling progress arc
+            Circle()
+                .trim(from: 0, to: CGFloat(progress))
+                .stroke(Color.cyan, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .frame(width: 64, height: 64)
+                .rotationEffect(.degrees(-90))
+                .animation(.linear(duration: 0.05), value: progress)
+
+            // Pulsing centre dot
+            Circle()
+                .fill(Color.white)
+                .frame(width: pulsing ? 18 : 12, height: pulsing ? 18 : 12)
+                .shadow(color: .cyan.opacity(0.8), radius: pulsing ? 8 : 4)
+                .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: pulsing)
+                .onAppear { pulsing = true }
         }
     }
 }

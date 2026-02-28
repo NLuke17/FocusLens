@@ -31,7 +31,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Create overlay window
         overlayWindow = OverlayWindow()
-        overlayWindow?.makeKeyAndOrderFront(nil)
+        overlayWindow?.orderFront(nil)
         
         // Register global keyboard shortcuts
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in

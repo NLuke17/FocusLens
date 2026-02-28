@@ -36,5 +36,7 @@
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>FocusLens uses the camera to track your eye gaze and move the focus circle to where you are looking.</string>
 </dict>
 </plist>

@@ -134,7 +134,28 @@ struct ControlBarView: View {
                     .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain)
-            
+
+            // Eye tracking toggle + calibrate button
+            EyeTrackingToggle(viewModel: viewModel)
+
+            if viewModel.trackingMode == .eye {
+                Button(action: { viewModel.calibration.startCalibration() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: viewModel.calibration.isCalibrated ? "checkmark.circle.fill" : "scope")
+                            .font(.system(size: 12))
+                        Text(viewModel.calibration.isCalibrated ? "Recalibrate" : "Calibrate")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(viewModel.calibration.isCalibrated ? Color.green.opacity(0.2) : Color.orange.opacity(0.2))
+                    .foregroundColor(viewModel.calibration.isCalibrated ? .green : .orange)
+                    .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+                .help("Run 5-point eye tracking calibration")
+            }
+
             Divider()
                 .frame(height: 24)
             
@@ -171,5 +192,63 @@ struct ControlBarView: View {
                     currentDragOffset = .zero
                 }
         )
+    }
+}
+
+// MARK: - Eye Tracking Toggle
+
+struct EyeTrackingToggle: View {
+    @ObservedObject var viewModel: OverlayViewModel
+
+    private var isEyeMode: Bool { viewModel.trackingMode == .eye }
+    private var tracker: EyeTrackingManager { viewModel.eyeTracker }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            // Status dot: green = face found, orange = searching, red = error
+            if isEyeMode {
+                Circle()
+                    .fill(dotColor)
+                    .frame(width: 6, height: 6)
+                    .help(dotHelp)
+            }
+
+            Button(action: {
+                viewModel.setTrackingMode(isEyeMode ? .cursor : .eye)
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: isEyeMode ? "eye.fill" : "eye")
+                        .font(.system(size: 13))
+                    Text(isEyeMode ? "Eye" : "Cursor")
+                        .font(.system(size: 10, weight: .medium))
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(isEyeMode ? Color.blue.opacity(0.25) : Color.gray.opacity(0.15))
+                .foregroundColor(isEyeMode ? .blue : .primary)
+                .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
+            .help(isEyeMode ? "Switch to cursor tracking" : "Switch to eye tracking")
+
+            // Inline error message
+            if let error = tracker.errorMessage {
+                Text(error)
+                    .font(.system(size: 9))
+                    .foregroundColor(.red)
+                    .lineLimit(1)
+                    .frame(maxWidth: 180)
+            }
+        }
+    }
+
+    private var dotColor: Color {
+        if tracker.errorMessage != nil { return .red }
+        return tracker.faceDetected ? .green : .orange
+    }
+
+    private var dotHelp: String {
+        if let error = tracker.errorMessage { return error }
+        return tracker.faceDetected ? "Face detected" : "Searching for face…"
     }
 }

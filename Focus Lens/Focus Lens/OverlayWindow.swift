@@ -46,16 +46,16 @@ class OverlayWindow: NSWindow {
             // Convert from screen coordinates (bottom-left origin) to view coordinates (top-left origin)
             if let screen = NSScreen.main {
                 let viewY = screen.frame.height - mouseLocation.y
-                self?.viewModel.mousePosition = CGPoint(x: mouseLocation.x, y: viewY)
+                self?.viewModel.updateCursorPosition(CGPoint(x: mouseLocation.x, y: viewY))
             }
         }
-        
+
         // Also track local mouse events
         NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
             let mouseLocation = NSEvent.mouseLocation
             if let screen = NSScreen.main {
                 let viewY = screen.frame.height - mouseLocation.y
-                self?.viewModel.mousePosition = CGPoint(x: mouseLocation.x, y: viewY)
+                self?.viewModel.updateCursorPosition(CGPoint(x: mouseLocation.x, y: viewY))
             }
             return event
         }
