@@ -64,8 +64,19 @@ struct BlurOverlayView: View {
     
     var body: some View {
         GeometryReader { geometry in
-            // Use NSVisualEffectView for native blur
-            VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
+            // Only show blur if blurRadius > 0
+            if blurRadius > 0 {
+                ZStack {
+                    // Finer blur control: use fewer layers with smoother opacity scaling
+                    // This provides more noticeable changes across the 0-50 range
+                    let layers = max(1, Int(blurRadius / 16.67))  // 0-50 → 0-3 layers
+                    let opacity = min(1.0, blurRadius / 50.0)     // Linear 0-50 → 0-1
+                    
+                    ForEach(0..<layers, id: \.self) { _ in
+                        VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
+                            .opacity(opacity)
+                    }
+                }
                 .mask(
                     Canvas { context, size in
                         // Fill entire screen
@@ -87,6 +98,7 @@ struct BlurOverlayView: View {
                         context.fill(circlePath, with: .color(.white))
                     }
                 )
+            }
         }
     }
 }
