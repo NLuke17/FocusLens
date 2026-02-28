@@ -22,6 +22,7 @@ struct OverlayContentView: View {
                     blurRadius: viewModel.blurRadius
                 )
                 .allowsHitTesting(false)
+                .zIndex(0)
                 
                 // Dim layer with circular cutout
                 DimOverlayView(
@@ -30,6 +31,7 @@ struct OverlayContentView: View {
                     dimOpacity: viewModel.dimOpacity
                 )
                 .allowsHitTesting(false)
+                .zIndex(1)
                 
                 // Focus ring
                 FocusRingView(
@@ -37,12 +39,13 @@ struct OverlayContentView: View {
                     focusRadius: viewModel.focusRadius
                 )
                 .allowsHitTesting(false)
+                .zIndex(2)
             }
             
-            // Control bar at the top
+            // Control bar at the top - always on top with highest z-index
             VStack {
                 ControlBarView(viewModel: viewModel)
-                    .padding(.top, 20)
+                    .padding(.top, 60)
                     .onHover { hovering in
                         // Enable mouse events when hovering control bar
                         window?.ignoresMouseEvents = !hovering
@@ -50,6 +53,7 @@ struct OverlayContentView: View {
                 
                 Spacer()
             }
+            .zIndex(999)  // Always on top
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.clear)
