@@ -5,7 +5,7 @@ FocusLens is a native macOS overlay application that provides focus enhancement 
 ## Set up
 
 Make sure you are on Mac OS  
-Clone the repo and open up `Focus Lens Release 2` on your file explorer  
+Clone the repo and open up `Focus Lens Release 3` on your file explorer  
 Double click the app to run  
 To use the eye tracking feature, be sure to keep your head still and calibrate first
 
