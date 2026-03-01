@@ -147,7 +147,11 @@ struct ControlBarView: View {
             EyeTrackingToggle(viewModel: viewModel)
 
             if viewModel.trackingMode == .eye {
-                Button(action: { viewModel.calibration.startCalibration() }) {
+                Button(action: { 
+                    // Ensure overlay is enabled for calibration
+                    viewModel.enabled = true
+                    viewModel.calibration.startCalibration()
+                }) {
                     HStack(spacing: 4) {
                         Image(systemName: viewModel.calibration.isCalibrated ? "checkmark.circle.fill" : "scope")
                             .font(.system(size: 12))

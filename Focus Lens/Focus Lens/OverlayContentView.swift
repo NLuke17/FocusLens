@@ -14,7 +14,17 @@ struct OverlayContentView: View {
     
     var body: some View {
         ZStack {
-            if viewModel.enabled {
+            // Calibration overlay — always shows when calibrating, regardless of overlay state
+            if viewModel.calibration.isCalibrating {
+                CalibrationOverlayView(calibration: viewModel.calibration)
+                    .allowsHitTesting(true)
+                    .zIndex(500)  // High z-index to be on top
+                    .onAppear  { window?.ignoresMouseEvents = false }
+                    .onDisappear { window?.ignoresMouseEvents = true }
+            }
+            
+            // Only show blur/dim/focus effects when enabled AND not calibrating
+            if viewModel.enabled && !viewModel.calibration.isCalibrating {
                 // Blur layer with circular cutout
                 BlurOverlayView(
                     mousePosition: viewModel.mousePosition,
@@ -42,31 +52,28 @@ struct OverlayContentView: View {
                 .zIndex(2)
             }
             
-            // Calibration overlay — sits above the focus effects, below the control bar
-            if viewModel.calibration.isCalibrating {
-                CalibrationOverlayView(calibration: viewModel.calibration)
-                    .allowsHitTesting(true)
-                    .zIndex(100)
-                    .onAppear  { window?.ignoresMouseEvents = false }
-                    .onDisappear { window?.ignoresMouseEvents = true }
-            }
-
-            // Control bar at the top - always on top with highest z-index
+            // Control bar
             VStack {
                 ControlBarView(viewModel: viewModel)
                     .padding(.top, 60)
                     .onHover { hovering in
-                        // Enable mouse events when hovering control bar
-                        window?.ignoresMouseEvents = !hovering
+                        isControlBarHovered = hovering
+                        // Only control mouse events if not calibrating
+                        if !viewModel.calibration.isCalibrating {
+                            window?.ignoresMouseEvents = !hovering
+                        }
                     }
-
                 Spacer()
             }
-            .zIndex(999)  // Always on top
+            .zIndex(999)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.clear)
         .preferredColorScheme(viewModel.darkMode ? .dark : .light)
+        .onAppear {
+            // Optimization #9: Pass window reference to eye tracker for multi-display support
+            viewModel.eyeTracker.overlayWindow = window
+        }
     }
 }
 

@@ -49,6 +49,13 @@ class CalibrationManager: ObservableObject {
         stepProgress = 0
         isCalibrated = false
         isCalibrating = true
+        
+        // Force update on main thread
+        DispatchQueue.main.async {
+            self.objectWillChange.send()
+        }
+        
+        print("🎯 Calibration started - waiting for samples...")
     }
 
     func cancelCalibration() {
@@ -63,17 +70,32 @@ class CalibrationManager: ObservableObject {
         guard isCalibrating else { return }
 
         currentSamples.append(signal)
-        stepProgress = Double(currentSamples.count) / Double(samplesPerPoint)
+        
+        // Force UI update for progress
+        DispatchQueue.main.async {
+            self.stepProgress = Double(self.currentSamples.count) / Double(self.samplesPerPoint)
+            self.objectWillChange.send()
+        }
+        
+        // Debug: Log progress every 10 samples
+        if currentSamples.count % 10 == 0 {
+            print("📊 Calibration step \(currentStep): \(currentSamples.count)/\(samplesPerPoint) samples, progress: \(stepProgress)")
+        }
 
         if currentSamples.count >= samplesPerPoint {
             collected.append(currentSamples)
             currentSamples = []
-            stepProgress = 0
-
-            if collected.count >= points.count {
-                finalise()
-            } else {
-                currentStep += 1
+            
+            DispatchQueue.main.async {
+                self.stepProgress = 0
+                
+                if self.collected.count >= self.points.count {
+                    self.finalise()
+                } else {
+                    self.currentStep += 1
+                    print("✅ Calibration step \(self.currentStep - 1) complete, moving to step \(self.currentStep)")
+                    self.objectWillChange.send()
+                }
             }
         }
     }

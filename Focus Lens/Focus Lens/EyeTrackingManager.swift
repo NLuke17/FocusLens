@@ -4,6 +4,7 @@
 //
 //  Iris-based gaze tracking using Apple Vision + AVFoundation.
 //  Uses a One Euro Filter for adaptive jitter reduction.
+//  Optimized for performance and accuracy.
 //
 
 import AVFoundation
@@ -22,19 +23,45 @@ class EyeTrackingManager: NSObject, ObservableObject {
     @Published var errorMessage: String? = nil
 
     private var captureSession: AVCaptureSession?
-    private let sessionQueue = DispatchQueue(label: "com.focuslens.eyeTracking", qos: .userInteractive)
-
-    // One Euro Filters — one for the raw signal (used by calibration),
-    // one for the default screen-space output.
-    // minCutoff: smoothing at rest (lower = smoother, but can feel laggy)
-    // beta: speed responsiveness (higher = snappier on fast moves)
-    // Optimized values: lower minCutoff for smoothness, higher beta for responsiveness
-    private var rawFilter    = OneEuroFilter2D(minCutoff: 0.3,  beta: 0.02)
-    private var screenFilter = OneEuroFilter2D(minCutoff: 0.3,  beta: 0.02)
+    private let captureQueue = DispatchQueue(label: "com.focuslens.capture", qos: .userInitiated)
+    private let visionQueue = DispatchQueue(label: "com.focuslens.vision", qos: .userInitiated)
     
-    // Outlier detection - track recent gaze positions
-    private var recentGazes: [CGPoint] = []
-    private let maxHistory = 5  // Reduced history for faster adaptation
+    // Reuse Vision request for performance (Optimization #1)
+    private lazy var faceLandmarkRequest: VNDetectFaceLandmarksRequest = {
+        let request = VNDetectFaceLandmarksRequest()
+        if #available(macOS 12, *) {
+            request.revision = VNDetectFaceLandmarksRequestRevision3
+        }
+        return request
+    }()
+    
+    // Sequence handler for temporal context (Optimization #1)
+    private lazy var sequenceHandler = VNSequenceRequestHandler()
+
+    // One Euro Filters for smoothing (Optimization #3 - consistent signal path)
+    private var normalizedFilter = OneEuroFilter2D(minCutoff: 0.25, beta: 0.03, dCutoff: 2.0)
+    private var screenFilter = OneEuroFilter2D(minCutoff: 0.2, beta: 0.02, dCutoff: 2.0)
+    
+    // Outlier detection with velocity awareness (Optimization #4 & #10)
+    private var gazeHistory: [GazeFrame] = []
+    private let maxHistory = 10  // Optimization #10: increased from 5
+    private var lastFilteredGaze: CGPoint = .zero
+    private var lastGazeVelocity: CGPoint = .zero
+    private var lastTimestamp: TimeInterval = 0
+    
+    // Face scale smoothing (Optimization #7)
+    private var smoothedFaceScale: CGFloat = 0.15
+    private let faceScaleAlpha: CGFloat = 0.3
+    
+    // Tracking quality monitoring (Optimization #2 & #5)
+    private var consecutiveVisionFailures = 0
+    private var consecutiveOutliers = 0
+    private let maxConsecutiveOutliers = 8
+    private var isVisionBusy = false  // Optimization #2: drop frames if busy
+    private var lastGoodQualityTime: TimeInterval = 0
+    
+    // Window for multi-display support (Optimization #9)
+    weak var overlayWindow: NSWindow?
 
     // MARK: - Public API
 
@@ -48,17 +75,22 @@ class EyeTrackingManager: NSObject, ObservableObject {
                 }
                 return
             }
-            self.sessionQueue.async { self.setupCaptureSession() }
+            self.captureQueue.async { self.setupCaptureSession() }
         }
     }
 
     func stopTracking() {
-        sessionQueue.async { [weak self] in
+        captureQueue.async { [weak self] in
             self?.captureSession?.stopRunning()
             self?.captureSession = nil
-            self?.rawFilter.reset()
+            self?.normalizedFilter.reset()
             self?.screenFilter.reset()
-            self?.recentGazes.removeAll()
+            self?.gazeHistory.removeAll()
+            self?.consecutiveOutliers = 0
+            self?.consecutiveVisionFailures = 0
+            self?.isVisionBusy = false
+            self?.smoothedFaceScale = 0.15
+            self?.lastGoodQualityTime = 0
         }
         DispatchQueue.main.async {
             self.isTracking = false
@@ -93,7 +125,7 @@ class EyeTrackingManager: NSObject, ObservableObject {
         }
 
         let session = AVCaptureSession()
-        session.sessionPreset = .hd1280x720  // Higher resolution for better landmark detection
+        session.sessionPreset = .hd1280x720
 
         guard session.canAddInput(input) else {
             DispatchQueue.main.async { self.errorMessage = "Camera input rejected." }
@@ -104,7 +136,7 @@ class EyeTrackingManager: NSObject, ObservableObject {
         let output = AVCaptureVideoDataOutput()
         output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
         output.alwaysDiscardsLateVideoFrames = true
-        output.setSampleBufferDelegate(self, queue: sessionQueue)
+        output.setSampleBufferDelegate(self, queue: captureQueue)  // Optimization #2
 
         guard session.canAddOutput(output) else {
             DispatchQueue.main.async { self.errorMessage = "Camera output rejected." }
@@ -123,7 +155,7 @@ class EyeTrackingManager: NSObject, ObservableObject {
     }
 }
 
-// MARK: - Frame capture
+// MARK: - Frame capture (Optimization #2: lightweight capture handler)
 
 extension EyeTrackingManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(
@@ -131,29 +163,42 @@ extension EyeTrackingManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
+        // Optimization #2: If Vision is busy, drop this frame
+        guard !isVisionBusy else { return }
+        
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-
-        let request = VNDetectFaceLandmarksRequest()
-        if #available(macOS 12, *) {
-            request.revision = VNDetectFaceLandmarksRequestRevision3
+        let timestamp = CACurrentMediaTime()
+        
+        // Dispatch heavy Vision work to separate queue
+        isVisionBusy = true
+        visionQueue.async { [weak self] in
+            self?.performVision(on: pixelBuffer, timestamp: timestamp)
+            self?.isVisionBusy = false
         }
-
-        let handler = VNImageRequestHandler(
-            cvPixelBuffer: pixelBuffer,
-            orientation: .leftMirrored,
-            options: [:]
-        )
-        do {
-            try handler.perform([request])
-            let timestamp = CACurrentMediaTime()
-            processResults(request.results, timestamp: timestamp)
-        } catch { }
     }
 }
 
-// MARK: - Gaze estimation
+// MARK: - Vision processing
 
 private extension EyeTrackingManager {
+    
+    func performVision(on pixelBuffer: CVPixelBuffer, timestamp: TimeInterval) {
+        do {
+            // Optimization #1: Reuse request and use sequence handler
+            try sequenceHandler.perform([faceLandmarkRequest], on: pixelBuffer, orientation: .leftMirrored)
+            consecutiveVisionFailures = 0
+            processResults(faceLandmarkRequest.results, timestamp: timestamp)
+        } catch {
+            consecutiveVisionFailures += 1
+            // Optimization #10: Surface error if persistent
+            if consecutiveVisionFailures > 30 {
+                DispatchQueue.main.async {
+                    self.errorMessage = "Vision tracking failed. Try adjusting camera."
+                    self.consecutiveVisionFailures = 0  // Reset to avoid spam
+                }
+            }
+        }
+    }
 
     func processResults(_ results: [VNFaceObservation]?, timestamp: Double) {
         guard
@@ -167,14 +212,26 @@ private extension EyeTrackingManager {
             !rightPupil.normalizedPoints.isEmpty
         else {
             DispatchQueue.main.async { self.faceDetected = false }
+            // Optimization #10: Freeze last gaze instead of resetting
             return
         }
 
         DispatchQueue.main.async { self.faceDetected = true }
 
         let faceBounds = face.boundingBox
+        let faceConfidence = face.confidence
+        
+        // Optimization #7: Smooth face scale to reduce jitter amplification
+        let rawFaceScale = sqrt(faceBounds.width * faceBounds.height)
+        smoothedFaceScale = faceScaleAlpha * rawFaceScale + (1.0 - faceScaleAlpha) * smoothedFaceScale
+        
+        // Clamp scale changes to prevent sudden jumps (Optimization #7)
+        let scaleChange = abs(rawFaceScale - smoothedFaceScale) / smoothedFaceScale
+        if scaleChange > 0.15 {
+            smoothedFaceScale = rawFaceScale  // Big change - probably valid head movement
+        }
 
-        // Compute pupil centers more accurately by averaging all pupil points
+        // Compute pupil centers
         let leftPupilImg  = avgPoint(leftPupil.normalizedPoints, in: faceBounds)
         let rightPupilImg = avgPoint(rightPupil.normalizedPoints, in: faceBounds)
 
@@ -183,82 +240,157 @@ private extension EyeTrackingManager {
         let leftWidth   = eyeWidth(leftEye,   in: faceBounds)
         let rightWidth  = eyeWidth(rightEye,  in: faceBounds)
 
-        // Compute iris offset relative to eye dimensions
-        // Increased scaling for more pronounced movement detection
+        // Optimization #6: Adaptive eye weights based on confidence
+        let leftConf = computeEyeConfidence(width: leftWidth, pupilCount: leftPupil.pointCount)
+        let rightConf = computeEyeConfidence(width: rightWidth, pupilCount: rightPupil.pointCount)
+        let totalConf = leftConf + rightConf
+        let leftWeight: CGFloat = totalConf > 0 ? leftConf / totalConf : 0.5
+        let rightWeight: CGFloat = totalConf > 0 ? rightConf / totalConf : 0.5
+
+        // Compute iris offsets
         let leftOffX  = leftWidth  > 0 ? (leftPupilImg.x  - leftCenter.x)  / leftWidth  : 0
         let leftOffY  = leftWidth  > 0 ? (leftPupilImg.y  - leftCenter.y)  / leftWidth  : 0
         let rightOffX = rightWidth > 0 ? (rightPupilImg.x - rightCenter.x) / rightWidth : 0
         let rightOffY = rightWidth > 0 ? (rightPupilImg.y - rightCenter.y) / rightWidth : 0
 
-        // Average both eyes with weighted contribution
-        // Give slightly more weight to the dominant eye (right eye for most people)
-        let leftWeight: CGFloat = 0.45
-        let rightWeight: CGFloat = 0.55
         let irisOffX = leftOffX * leftWeight + rightOffX * rightWeight
         let irisOffY = leftOffY * leftWeight + rightOffY * rightWeight
 
-        // Combine face position with iris offset for gaze estimation
-        // Use adaptive scaling based on face size (closer face = more sensitive)
-        // Increased scaling factor for better range of motion
-        let faceScale = sqrt(faceBounds.width * faceBounds.height) * 1.2
-        let gazeNormX = faceBounds.midX + irisOffX * faceScale
-        let gazeNormY = faceBounds.midY + irisOffY * faceScale
+        // Optimization #7: Use smoothed face scale
+        let scaleX: CGFloat = smoothedFaceScale * 1.2
+        let scaleY: CGFloat = smoothedFaceScale * 1.4
+        let yBiasCorrection: CGFloat = 0.08
+        
+        let gazeNormX = faceBounds.midX + irisOffX * scaleX
+        let gazeNormY = faceBounds.midY + irisOffY * scaleY + yBiasCorrection
 
-        // Raw signal (top-left origin, 0-1)
         let rawUnsmoothed = CGPoint(x: gazeNormX, y: 1.0 - gazeNormY)
         
-        // Outlier rejection: Check if this point is too far from recent history
-        // Only reject if we have enough history and the point is extremely far
-        if recentGazes.count >= 3 && isOutlier(rawUnsmoothed, history: recentGazes) {
-            // Skip this frame - likely a blink or tracking error
-            return
+        // Optimization #8: Soft clamp in normalized space
+        let clampedX = softClamp(rawUnsmoothed.x, min: -0.1, max: 1.1)
+        let clampedY = softClamp(rawUnsmoothed.y, min: -0.1, max: 1.1)
+        let clampedRaw = CGPoint(x: clampedX, y: clampedY)
+        
+        // Optimization #4: Velocity-aware outlier detection
+        let dt = timestamp - lastTimestamp
+        if dt > 0 && !gazeHistory.isEmpty {
+            let predicted = CGPoint(
+                x: lastFilteredGaze.x + lastGazeVelocity.x * CGFloat(dt),
+                y: lastFilteredGaze.y + lastGazeVelocity.y * CGFloat(dt)
+            )
+            let deviation = hypot(clampedRaw.x - predicted.x, clampedRaw.y - predicted.y)
+            let speed = hypot(lastGazeVelocity.x, lastGazeVelocity.y)
+            
+            // Adaptive threshold based on current speed and face scale
+            let baseThreshold: CGFloat = 0.15
+            let speedFactor: CGFloat = 1.0 + min(speed * 2.0, 2.0)
+            let scaleFactor: CGFloat = 1.0 / max(smoothedFaceScale, 0.1)
+            let threshold = baseThreshold * speedFactor * scaleFactor
+            
+            if deviation > threshold {
+                consecutiveOutliers += 1
+                
+                // Reset only if many consecutive outliers AND low confidence
+                if consecutiveOutliers >= maxConsecutiveOutliers && faceConfidence < 0.8 {
+                    normalizedFilter.reset()
+                    screenFilter.reset()
+                    gazeHistory.removeAll()
+                    consecutiveOutliers = 0
+                    smoothedFaceScale = rawFaceScale
+                }
+                return
+            }
         }
         
-        // Update history
-        recentGazes.append(rawUnsmoothed)
-        if recentGazes.count > maxHistory {
-            recentGazes.removeFirst()
+        consecutiveOutliers = 0
+        lastTimestamp = timestamp
+        
+        // Optimization #3: Consistent signal path - filter in normalized space first
+        let filteredNormalized = normalizedFilter.filter(clampedRaw, timestamp: timestamp)
+        
+        // Update velocity
+        if dt > 0 {
+            lastGazeVelocity = CGPoint(
+                x: (filteredNormalized.x - lastFilteredGaze.x) / CGFloat(dt),
+                y: (filteredNormalized.y - lastFilteredGaze.y) / CGFloat(dt)
+            )
+        }
+        lastFilteredGaze = filteredNormalized
+        
+        // Store in history
+        gazeHistory.append(GazeFrame(point: filteredNormalized, timestamp: timestamp, confidence: faceConfidence))
+        if gazeHistory.count > maxHistory {
+            gazeHistory.removeFirst()
         }
         
-        // Apply smoothing filter
-        let raw = rawFilter.filter(rawUnsmoothed, timestamp: timestamp)
-
-        guard let screen = NSScreen.main else { return }
+        // Track quality for smart reset (Optimization #5)
+        if faceConfidence > 0.85 && consecutiveOutliers == 0 {
+            lastGoodQualityTime = timestamp
+        }
+        
+        // Optimization #9: Use overlay window's screen if available
+        let targetScreen = overlayWindow?.screen ?? NSScreen.main
+        guard let screen = targetScreen else { return }
         let w = screen.frame.width
         let h = screen.frame.height
 
-        // Default uncalibrated screen mapping with improved gain
-        // Higher gain = more screen coverage, better responsiveness
-        let gain: CGFloat = 3.0
-        let mappedX = (gazeNormX - 0.5) * gain + 0.5
-        let mappedY = (gazeNormY - 0.5) * gain + 0.5
-
+        // Map filtered normalized gaze to screen space (Optimization #3)
+        let gainX: CGFloat = 3.0
+        let gainY: CGFloat = 2.8
+        let mappedX = (filteredNormalized.x - 0.5) * gainX + 0.5
+        let mappedY = (filteredNormalized.y - 0.5) * gainY + 0.5
+        
+        // Optimization #8: Already soft-clamped, just convert to pixels
         let screenRaw = CGPoint(
-            x: Swift.max(0, Swift.min(mappedX * w, w)),
-            y: Swift.max(0, Swift.min((1.0 - mappedY) * h, h))
+            x: max(0, min(mappedX * w, w)),
+            y: max(0, min((1.0 - mappedY) * h, h))
         )
+        
+        // Apply final screen-space smoothing (Optimization #3)
         let screenSmoothed = screenFilter.filter(screenRaw, timestamp: timestamp)
 
         DispatchQueue.main.async {
-            self.rawGazeSignal = raw
+            self.rawGazeSignal = filteredNormalized  // Optimization #3: use filtered signal
             self.gazePoint = screenSmoothed
         }
     }
 
     // MARK: Helpers
     
-    /// Check if a point is an outlier compared to recent history
-    func isOutlier(_ point: CGPoint, history: [CGPoint]) -> Bool {
-        // Calculate average distance to recent points
-        let distances = history.map { hypot($0.x - point.x, $0.y - point.y) }
-        let avgDistance = distances.reduce(0, +) / CGFloat(distances.count)
+    /// Optimization #6: Compute per-eye confidence
+    func computeEyeConfidence(width: CGFloat, pupilCount: Int) -> CGFloat {
+        var conf: CGFloat = 1.0
         
-        // More lenient threshold - only reject extreme outliers (likely blinks)
-        // Increased from 0.3 to 0.4 to allow more natural eye movement
-        return avgDistance > 0.4
+        // Penalize if eye width is too small (unreliable)
+        if width < 0.02 {
+            conf *= 0.5
+        }
+        
+        // Prefer more pupil points
+        if pupilCount < 3 {
+            conf *= 0.7
+        }
+        
+        return conf
     }
     
-    /// Average multiple points (e.g., all pupil landmark points)
+    /// Optimization #8: Soft saturation function
+    func softClamp(_ value: CGFloat, min minVal: CGFloat, max maxVal: CGFloat) -> CGFloat {
+        if value < minVal {
+            let excess = minVal - value
+            return minVal - tanh(excess) * 0.1
+        } else if value > maxVal {
+            let excess = value - maxVal
+            return maxVal + tanh(excess) * 0.1
+        }
+        return value
+    }
+    
+    func tanh(_ x: CGFloat) -> CGFloat {
+        let ex = exp(2.0 * x)
+        return (ex - 1.0) / (ex + 1.0)
+    }
+    
     func avgPoint(_ points: [CGPoint], in face: CGRect) -> CGPoint {
         let imgPoints = points.map { toImageCoords($0, in: face) }
         let n = CGFloat(imgPoints.count)
@@ -284,12 +416,16 @@ private extension EyeTrackingManager {
     }
 }
 
+// MARK: - Supporting Types
+
+private struct GazeFrame {
+    let point: CGPoint
+    let timestamp: TimeInterval
+    let confidence: Float
+}
+
 // MARK: - One Euro Filter
 
-/// Adaptive low-pass filter for real-time signal smoothing.
-/// Reduces jitter when still, stays responsive during fast movements.
-/// Reference: Casiez et al., "1€ Filter: A Simple Speed-based Low-pass Filter
-/// for Noisy Input in Interactive Systems", CHI 2012.
 private class OneEuroFilter2D {
     private var fx: OneEuroFilter1D
     private var fy: OneEuroFilter1D
@@ -334,12 +470,10 @@ private class OneEuroFilter1D {
         let dt = t - tp
         guard dt > 0 else { return xp }
 
-        // Derivative low-pass
         let aDeriv = alpha(cutoff: dCutoff, dt: dt)
         let dx = (x - xp) / dt
         let dxHat = aDeriv * dx + (1.0 - aDeriv) * dxPrev
 
-        // Adaptive cutoff based on speed
         let cutoff = minCutoff + beta * abs(dxHat)
         let a = alpha(cutoff: cutoff, dt: dt)
         let xHat = a * x + (1.0 - a) * xp
