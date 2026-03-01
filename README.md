@@ -3,9 +3,10 @@
 FocusLens is a native macOS overlay application that provides focus enhancement with real-time blur effects. Allowing for students to web surf in privacy.
 
 ## Set up
-Make sure you are on Mac OS
-Clone the repo and open up `Focus Lens Release 1` on your file explorer
-Double click the app to run
+
+Make sure you are on Mac OS  
+Clone the repo and open up `Focus Lens Release 1` on your file explorer  
+Double click the app to run  
 
 ## Features
 
