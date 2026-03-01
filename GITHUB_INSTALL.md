@@ -26,10 +26,12 @@ Choose ONE of these methods:
 3. Type this command and press Enter:
 
 ```bash
-xattr -cr ~/Downloads/Focus-Lens*/Focus\ Lens.app && open ~/Downloads/Focus-Lens*/Focus\ Lens.app
+xattr -cr ~/Downloads/Focus-Lens*/Focus\ Lens.app
 ```
 
-✅ This removes quarantine and opens the app immediately!
+4. **Double-click** `Focus Lens.app` to launch
+
+✅ This removes the quarantine attribute so you can open the app normally!
 
 **If the folder isn't in Downloads, replace `~/Downloads` with the actual path.**
 
@@ -232,11 +234,11 @@ Open an issue on GitHub with:
 Save these for quick reference:
 
 ```bash
-# Remove quarantine and open (if in Downloads)
-xattr -cr ~/Downloads/Focus-Lens*/Focus\ Lens.app && open ~/Downloads/Focus-Lens*/Focus\ Lens.app
+# Remove quarantine (if in Downloads)
+xattr -cr ~/Downloads/Focus-Lens*/Focus\ Lens.app
 
-# Remove quarantine and open (current directory)
-xattr -cr "Focus Lens.app" && open "Focus Lens.app"
+# Remove quarantine (current directory)
+xattr -cr "Focus Lens.app"
 
 # Check quarantine status
 xattr -l "Focus Lens.app"

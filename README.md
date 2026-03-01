@@ -15,10 +15,14 @@ When downloading from GitHub, macOS will show a security warning. **The app is s
 3. **Open Terminal** and run:
 
 ```bash
-xattr -cr ~/Downloads/Focus-Lens*/Focus\ Lens.app && open ~/Downloads/Focus-Lens*/Focus\ Lens.app
+xattr -cr ~/Downloads/Focus-Lens*/Focus\ Lens.app
 ```
 
-✅ Done! The app will launch and request Camera & Screen Recording permissions.
+4. **Double-click** `Focus Lens.app` to launch
+
+✅ The app will request Camera & Screen Recording permissions.
+
+**Alternative:** Run `bash install.sh` in the extracted folder (removes quarantine + launches automatically)
 
 **📖 Having trouble?** See **[GITHUB_INSTALL.md](GITHUB_INSTALL.md)** for detailed instructions and troubleshooting.
 
@@ -106,8 +110,6 @@ The app will be built to: `Focus Lens/DerivedData/.../Focus Lens.app`
 ## 📖 Documentation
 
 - **[GITHUB_INSTALL.md](GITHUB_INSTALL.md)** - Installation guide for GitHub downloads
-- **[DISTRIBUTION_GUIDE.md](DISTRIBUTION_GUIDE.md)** - Guide for signing and distribution
-- **[INSTALLATION_GUIDE.md](INSTALLATION_GUIDE.md)** - Comprehensive installation help
 
 ---
 
