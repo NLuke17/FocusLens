@@ -25,7 +25,7 @@ class OverlayViewModel: ObservableObject {
     let eyeTracker = EyeTrackingManager()
     let calibration = CalibrationManager()
     private var cancellables = Set<AnyCancellable>()
-
+    
     init() {
         if let screen = NSScreen.main {
             mousePosition = CGPoint(x: screen.frame.width / 2, y: screen.frame.height / 2)

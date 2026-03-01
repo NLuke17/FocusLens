@@ -12,9 +12,17 @@ struct ControlBarView: View {
     @State private var dragOffset: CGSize = .zero
     @State private var currentDragOffset: CGSize = .zero
     @State private var isMinimized: Bool = false
+    @State private var isDragHandleHovered: Bool = false
+    @State private var isDragging: Bool = false
     
     var body: some View {
         HStack(spacing: 16) {
+            // Drag handle (three dots)
+            DragHandleView(isHovered: $isDragHandleHovered)
+            
+            Divider()
+                .frame(height: 24)
+            
             // Enable/Disable toggle
             HStack(spacing: 8) {
                 Circle()
@@ -184,9 +192,15 @@ struct ControlBarView: View {
         .gesture(
             DragGesture()
                 .onChanged { value in
+                    if !isDragging {
+                        isDragging = true
+                        NSCursor.closedHand.push()
+                    }
                     currentDragOffset = value.translation
                 }
                 .onEnded { value in
+                    isDragging = false
+                    NSCursor.pop()
                     dragOffset.width += value.translation.width
                     dragOffset.height += value.translation.height
                     currentDragOffset = .zero
@@ -263,5 +277,36 @@ struct EyeTrackingToggle: View {
     private var dotHelp: String {
         if let error = viewModel.eyeTracker.errorMessage { return error }
         return viewModel.eyeTracker.faceDetected ? "Face detected" : "Searching for face…"
+    }
+}
+
+// MARK: - Drag Handle
+
+struct DragHandleView: View {
+    @Binding var isHovered: Bool
+    
+    var body: some View {
+        VStack(spacing: 3) {
+            ForEach(0..<3) { _ in
+                Circle()
+                    .fill(Color.secondary.opacity(isHovered ? 0.8 : 0.4))
+                    .frame(width: 4, height: 4)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.secondary.opacity(isHovered ? 0.15 : 0))
+        )
+        .onHover { hovering in
+            isHovered = hovering
+            if hovering {
+                NSCursor.openHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+        .help("Drag to move")
     }
 }
