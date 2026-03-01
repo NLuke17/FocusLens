@@ -30,8 +30,8 @@ class CalibrationManager: ObservableObject {
         CGPoint(x: 0.85, y: 0.85),  // bottom-right   — step 4
     ]
 
-    // How many frames to collect per point (~2 s at 30 fps)
-    private let samplesPerPoint = 60
+    // How many frames to collect per point (~3 seconds at 30 fps for more stable calibration)
+    private let samplesPerPoint = 90
 
     // MARK: Private
 
@@ -88,11 +88,21 @@ class CalibrationManager: ObservableObject {
 
     private func finalise() {
         // Average the collected samples for each calibration point
+        // Use median instead of mean to better reject outliers
         let avgSignals: [CGPoint] = collected.map { samples in
-            let n = CGFloat(samples.count)
+            // Sort and take median 50% of samples (remove outliers)
+            let sortedX = samples.map(\.x).sorted()
+            let sortedY = samples.map(\.y).sorted()
+            let count = samples.count
+            let trimAmount = count / 4  // Remove 25% from each end
+            
+            let trimmedX = sortedX.dropFirst(trimAmount).dropLast(trimAmount)
+            let trimmedY = sortedY.dropFirst(trimAmount).dropLast(trimAmount)
+            
+            let n = CGFloat(trimmedX.count)
             return CGPoint(
-                x: samples.map(\.x).reduce(0, +) / n,
-                y: samples.map(\.y).reduce(0, +) / n
+                x: trimmedX.reduce(0, +) / n,
+                y: trimmedY.reduce(0, +) / n
             )
         }
 

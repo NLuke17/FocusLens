@@ -26,14 +26,15 @@ class EyeTrackingManager: NSObject, ObservableObject {
 
     // One Euro Filters — one for the raw signal (used by calibration),
     // one for the default screen-space output.
-    // minCutoff: smoothing at rest (lower = smoother)
+    // minCutoff: smoothing at rest (lower = smoother, but can feel laggy)
     // beta: speed responsiveness (higher = snappier on fast moves)
-    private var rawFilter    = OneEuroFilter2D(minCutoff: 0.5,  beta: 0.008)  // More responsive
-    private var screenFilter = OneEuroFilter2D(minCutoff: 0.5,  beta: 0.008)
+    // Optimized values: lower minCutoff for smoothness, higher beta for responsiveness
+    private var rawFilter    = OneEuroFilter2D(minCutoff: 0.3,  beta: 0.02)
+    private var screenFilter = OneEuroFilter2D(minCutoff: 0.3,  beta: 0.02)
     
     // Outlier detection - track recent gaze positions
     private var recentGazes: [CGPoint] = []
-    private let maxHistory = 10
+    private let maxHistory = 5  // Reduced history for faster adaptation
 
     // MARK: - Public API
 
@@ -92,7 +93,7 @@ class EyeTrackingManager: NSObject, ObservableObject {
         }
 
         let session = AVCaptureSession()
-        session.sessionPreset = .vga640x480
+        session.sessionPreset = .hd1280x720  // Higher resolution for better landmark detection
 
         guard session.canAddInput(input) else {
             DispatchQueue.main.async { self.errorMessage = "Camera input rejected." }
@@ -183,18 +184,23 @@ private extension EyeTrackingManager {
         let rightWidth  = eyeWidth(rightEye,  in: faceBounds)
 
         // Compute iris offset relative to eye dimensions
+        // Increased scaling for more pronounced movement detection
         let leftOffX  = leftWidth  > 0 ? (leftPupilImg.x  - leftCenter.x)  / leftWidth  : 0
         let leftOffY  = leftWidth  > 0 ? (leftPupilImg.y  - leftCenter.y)  / leftWidth  : 0
         let rightOffX = rightWidth > 0 ? (rightPupilImg.x - rightCenter.x) / rightWidth : 0
         let rightOffY = rightWidth > 0 ? (rightPupilImg.y - rightCenter.y) / rightWidth : 0
 
-        // Average both eyes
-        let irisOffX = (leftOffX + rightOffX) / 2
-        let irisOffY = (leftOffY + rightOffY) / 2
+        // Average both eyes with weighted contribution
+        // Give slightly more weight to the dominant eye (right eye for most people)
+        let leftWeight: CGFloat = 0.45
+        let rightWeight: CGFloat = 0.55
+        let irisOffX = leftOffX * leftWeight + rightOffX * rightWeight
+        let irisOffY = leftOffY * leftWeight + rightOffY * rightWeight
 
         // Combine face position with iris offset for gaze estimation
         // Use adaptive scaling based on face size (closer face = more sensitive)
-        let faceScale = sqrt(faceBounds.width * faceBounds.height) * 0.7
+        // Increased scaling factor for better range of motion
+        let faceScale = sqrt(faceBounds.width * faceBounds.height) * 1.2
         let gazeNormX = faceBounds.midX + irisOffX * faceScale
         let gazeNormY = faceBounds.midY + irisOffY * faceScale
 
@@ -202,7 +208,8 @@ private extension EyeTrackingManager {
         let rawUnsmoothed = CGPoint(x: gazeNormX, y: 1.0 - gazeNormY)
         
         // Outlier rejection: Check if this point is too far from recent history
-        if !recentGazes.isEmpty && isOutlier(rawUnsmoothed, history: recentGazes) {
+        // Only reject if we have enough history and the point is extremely far
+        if recentGazes.count >= 3 && isOutlier(rawUnsmoothed, history: recentGazes) {
             // Skip this frame - likely a blink or tracking error
             return
         }
@@ -220,8 +227,9 @@ private extension EyeTrackingManager {
         let w = screen.frame.width
         let h = screen.frame.height
 
-        // Default uncalibrated screen mapping with better gain
-        let gain: CGFloat = 2.5  // Slightly increased for more screen coverage
+        // Default uncalibrated screen mapping with improved gain
+        // Higher gain = more screen coverage, better responsiveness
+        let gain: CGFloat = 3.0
         let mappedX = (gazeNormX - 0.5) * gain + 0.5
         let mappedY = (gazeNormY - 0.5) * gain + 0.5
 
@@ -241,12 +249,13 @@ private extension EyeTrackingManager {
     
     /// Check if a point is an outlier compared to recent history
     func isOutlier(_ point: CGPoint, history: [CGPoint]) -> Bool {
-        // Calculate median distance to recent points
+        // Calculate average distance to recent points
         let distances = history.map { hypot($0.x - point.x, $0.y - point.y) }
         let avgDistance = distances.reduce(0, +) / CGFloat(distances.count)
         
-        // Reject if more than 0.3 units away (in normalized space)
-        return avgDistance > 0.3
+        // More lenient threshold - only reject extreme outliers (likely blinks)
+        // Increased from 0.3 to 0.4 to allow more natural eye movement
+        return avgDistance > 0.4
     }
     
     /// Average multiple points (e.g., all pupil landmark points)
